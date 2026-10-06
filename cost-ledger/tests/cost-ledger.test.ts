@@ -115,8 +115,8 @@ const CARD_PROPS = {
   view: {},
 }
 
-const mountCard = ($: Engine, surface: 'terminal' | 'desktop', hasSurvey = false) =>
-  $.ui.mount({ plugin: 'cost-ledger', surface, component: 'AbovePrompt', props: { ...CARD_PROPS, hasSurvey } })
+const mountCard = ($: Engine, surface: 'terminal' | 'desktop', hasSurvey = false, bodyColumns = CARD_PROPS.bodyColumns) =>
+  $.ui.mount({ plugin: 'cost-ledger', surface, component: 'AbovePrompt', props: { ...CARD_PROPS, hasSurvey, bodyColumns } })
 
 const cardLabel = async (card: Awaited<ReturnType<typeof mountCard>>) =>
   String((await card.find({ key: 'open-pane' }))?.props.label)
@@ -223,13 +223,21 @@ test('輸入框上方的卡片：沒有請求不佔位、有問卷就讓開，�
 
     const card = await mountCard($, surface)
     expect(await cardLabel(card)).toBe('花費 $0.20 · 輸出 50 tok/s（平均 50）  詳細 ›')
+    // 卡片只佔一行：按鈕和長條橫排
+    expect((await card.find({ key: 'card' }))?.props.flexDirection).toBe('row')
     if (surface === 'terminal') {
-      // 字元長條總長是卡片寬度與 40 取小，未快取的輸入分不到一格就不畫
+      // 字元長條塞在按鈕右邊，總長 20 格（按鈕那行佔 45 格，寬 80 放得下）；未快取的輸入分不到一格就不畫
       const cells = (await card.findAll({ type: 'Text', text: /^[█▒]+$/ })).map((t) => t.text)
-      expect(cells.join('')).toHaveLength(40)
+      expect(cells.join('')).toHaveLength(20)
       expect(cells).toHaveLength(3)
+
+      // 寬 50 扣掉按鈕只剩 4 格，不畫長條，也不折成第二行
+      const narrow = await mountCard($, surface, false, 50)
+      expect(await narrow.findAll({ type: 'Text', text: /^[█▒]+$/ })).toHaveLength(0)
+      expect(await narrow.find({ key: 'open-pane' })).toBeDefined()
+      await narrow.unmount()
     } else {
-      expect(await card.find({ type: 'Svg' })).toBeDefined()
+      expect(String((await card.find({ type: 'Svg' }))?.props.source)).toContain('height="6"')
     }
 
     await card.press({ key: 'open-pane' })

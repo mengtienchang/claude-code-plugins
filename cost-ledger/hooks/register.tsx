@@ -515,7 +515,12 @@ const BAR_HEIGHT = 14
 const BAR_PAD = 5
 const BAR_GAP = 2.5
 
-const stackedBar = (parts: Amount[], width: number): string => {
+// 卡片只佔一行：長條跟在總額那行的右邊，細到比字矮，上下不留空白
+const CARD_BAR_WIDTH = 120
+const CARD_BAR_HEIGHT = 6
+const CARD_BAR_CELLS = 20
+
+const stackedBar = (parts: Amount[], width: number, height = BAR_HEIGHT, pad = BAR_PAD): string => {
   const total = parts.reduce((sum, p) => sum + p.usd, 0)
   const shown = parts.filter((p) => total > 0 && (p.usd / total) * width >= 1)
   const drawn = shown.reduce((sum, p) => sum + p.usd, 0)
@@ -523,16 +528,20 @@ const stackedBar = (parts: Amount[], width: number): string => {
   let x = 0
   const rects = shown.map((p) => {
     const w = (p.usd / drawn) * room
-    const rect = `<rect x="${x.toFixed(2)}" y="${BAR_PAD}" width="${w.toFixed(2)}" height="${BAR_HEIGHT}" fill="${fillOf(styleOf(p.label))}"/>`
+    const rect = `<rect x="${x.toFixed(2)}" y="${pad}" width="${w.toFixed(2)}" height="${height}" fill="${fillOf(styleOf(p.label))}"/>`
     x += w + BAR_GAP
     return rect
   })
   const hatched = shown.map((p) => styleOf(p.label)).find((s) => s?.isHatched)
   const defs =
-    `<clipPath id="ends"><rect y="${BAR_PAD}" width="${width}" height="${BAR_HEIGHT}" rx="4"/></clipPath>` +
+    `<clipPath id="ends"><rect y="${pad}" width="${width}" height="${height}" rx="${Math.min(4, height / 2)}"/></clipPath>` +
     (hatched ? hatch(hatched.fill, 8) : '')
-  return svg(width, BAR_HEIGHT + BAR_PAD * 2, defs, `<g clip-path="url(#ends)">${rects.join('')}</g>`)
+  return svg(width, height + pad * 2, defs, `<g clip-path="url(#ends)">${rects.join('')}</g>`)
 }
+
+// 終端機的顯示寬度：中日韓字與全形標點佔兩格，其餘一格
+const WIDE = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/
+const columnsOf = (text: string) => [...text].reduce((n, ch) => n + (WIDE.test(ch) ? 2 : 1), 0)
 
 // 終端機沒有 Svg，卡片的長條用字元畫：一項一段、照比例分格，四捨五入差的格數給小數部分最大的幾項，總長剛好 width；
 // 分不到一格的項不畫，5 分鐘的快取寫入用 ▒ 跟 1 小時的分開
@@ -715,8 +724,8 @@ export const register: Register = (on) => {
     return { result: await report($, Number.isInteger(pr) && pr > 0 ? `pr ${pr}` : '') }
   })
 
-  // 輸入框上方常駐的卡片：一行總額與輸出速度，整行是一顆按鈕，按了開面板看這個 session 的詳細；一條各項比例的長條。
-  // 有問卷要用這一格就讓開，還沒有任何請求也不佔位
+  // 輸入框上方常駐的卡片，只佔一行：總額與輸出速度是一顆按鈕，按了開面板看這個 session 的詳細；右邊跟一條細的各項比例長條。
+  // 終端機寬度不夠放長條時只留按鈕，不折成兩行。有問卷要用這一格就讓開，還沒有任何請求也不佔位
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const s = await read($, sessionLedger)
     if (e.props.hasSurvey || s.requests === 0) return next(e)
@@ -725,24 +734,31 @@ export const register: Register = (on) => {
     // 終端機沒有 Svg，畫字元長條（元素表的判斷見面板那邊）
     const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : null
     const shown = s.parts.filter((p) => p.usd > 0)
-    const barCells = Math.max(10, Math.min(e.props.bodyColumns, 40))
+    const label = cardLine(s)
+    // 按鈕與長條之間空一格
+    const barCells = Math.min(CARD_BAR_CELLS, e.props.bodyColumns - columnsOf(label) - 1)
     const bar =
       Svg === null ? (
-        <Box flexDirection="row">
-          {cellsOf(shown, barCells).map((c) => {
-            const style = styleOf(c.label)
-            return <Text color={style?.fill ?? NEUTRAL}>{(style?.isHatched ? '▒' : '█').repeat(c.cells)}</Text>
-          })}
-        </Box>
+        barCells < 6 ? null : (
+          <Box flexDirection="row">
+            {cellsOf(shown, barCells).map((c) => {
+              const style = styleOf(c.label)
+              return <Text color={style?.fill ?? NEUTRAL}>{(style?.isHatched ? '▒' : '█').repeat(c.cells)}</Text>
+            })}
+          </Box>
+        )
       ) : (
-        <Svg source={stackedBar(shown, 240)} alt={shown.map((p) => `${p.label} ${pct(p.usd, s.totalUsd)}`).join('、')} />
+        <Svg
+          source={stackedBar(shown, CARD_BAR_WIDTH, CARD_BAR_HEIGHT, 0)}
+          alt={shown.map((p) => `${p.label} ${pct(p.usd, s.totalUsd)}`).join('、')}
+        />
       )
     return (
-      <Box flexDirection="column">
+      <Box key="card" flexDirection="row" alignItems="center" gap={1}>
         <Button
           key="open-pane"
           plain
-          label={cardLine(s)}
+          label={label}
           onPress={async () => {
             await update($, ledgerView, () => 'session')
             if (!(await openPane($))) $.ui.toast('cost-ledger：這裡放不下面板，打 /ledger 把表印在對話裡')
