@@ -65,8 +65,8 @@ const stubEngine = (on: On, clock: { now: number }, files: Map<string, string>, 
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('tool.register', ($, e) => ({ value: { tool: `mcp__cost-ledger__${e.name}` } }))
   on('clock.every', () => ({ value: undefined }))
-  // 輸入框上方那一格引擎自己什麼都不畫
-  on('ui.render', { component: 'AbovePrompt' }, ($, e) => $.ui.resolve(e).Box({}))
+  // 輸入框上方那一格引擎自己什麼都不畫；這裡放一個別的插件（像 task-progress）畫的空格子，看卡片有沒有把它接上
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => $.ui.resolve(e).Box({ key: 'below' }))
   return { opens }
 }
 
@@ -212,6 +212,7 @@ test('輸入框上方的卡片：沒有請求不佔位、有問卷就讓開，�
   for (const surface of ['terminal', 'desktop'] as const) {
     const card = await mountCard($, surface)
     expect(await card.find({ key: 'open-pane' })).toBeUndefined()
+    expect(await card.find({ key: 'below' })).toBeDefined()
     await card.unmount()
   }
 
@@ -227,8 +228,9 @@ test('輸入框上方的卡片：沒有請求不佔位、有問卷就讓開，�
 
     const card = await mountCard($, surface)
     expect(await cardLabel(card)).toBe('花費 $0.20 · 輸出 50 tok/s（平均 50） · 首字平均 2.0s  詳細 ›')
-    // 卡片只佔一行：按鈕和長條橫排
+    // 卡片只佔一行：按鈕和長條橫排；別的插件畫的那一行接在下面
     expect((await card.find({ key: 'card' }))?.props.flexDirection).toBe('row')
+    expect(await card.find({ key: 'below' })).toBeDefined()
     if (surface === 'terminal') {
       // 字元長條塞在按鈕右邊，總長 20 格（按鈕那行佔 61 格，寬 100 放得下）；未快取的輸入分不到一格就不畫
       const cells = (await card.findAll({ type: 'Text', text: /^[█▒]+$/ })).map((t) => t.text)

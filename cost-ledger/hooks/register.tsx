@@ -755,10 +755,12 @@ export const register: Register = (on) => {
   })
 
   // 輸入框上方常駐的卡片，只佔一行：總額與輸出速度是一顆按鈕，按了開面板看這個 session 的詳細；右邊跟一條細的各項比例長條。
-  // 終端機寬度不夠放長條時只留按鈕，不折成兩行。有問卷要用這一格就讓開，還沒有任何請求也不佔位
+  // 終端機寬度不夠放長條時只留按鈕，不折成兩行。有問卷要用這一格就讓開，還沒有任何請求也不佔位。
+  // 別的插件（task-progress）也畫在這一格，把下面畫的接在自己下面，誰先誰後兩行都在
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const below = await next(e)
     const s = await read($, sessionLedger)
-    if (e.props.hasSurvey || s.requests === 0) return next(e)
+    if (e.props.hasSurvey || s.requests === 0) return below
     const elements = $.ui.resolve(e)
     const { Box, Text, Button } = elements
     // 終端機沒有 Svg，畫字元長條（元素表的判斷見面板那邊）
@@ -784,17 +786,20 @@ export const register: Register = (on) => {
         />
       )
     return (
-      <Box key="card" flexDirection="row" alignItems="center" gap={1}>
-        <Button
-          key="open-pane"
-          plain
-          label={label}
-          onPress={async () => {
-            await update($, ledgerView, () => 'session')
-            if (!(await openPane($))) $.ui.toast('cost-ledger：這裡放不下面板，打 /ledger 把表印在對話裡')
-          }}
-        />
-        {shown.length === 0 ? null : bar}
+      <Box flexDirection="column">
+        <Box key="card" flexDirection="row" alignItems="center" gap={1}>
+          <Button
+            key="open-pane"
+            plain
+            label={label}
+            onPress={async () => {
+              await update($, ledgerView, () => 'session')
+              if (!(await openPane($))) $.ui.toast('cost-ledger：這裡放不下面板，打 /ledger 把表印在對話裡')
+            }}
+          />
+          {shown.length === 0 ? null : bar}
+        </Box>
+        {below}
       </Box>
     )
   })
