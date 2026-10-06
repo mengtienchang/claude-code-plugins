@@ -14,7 +14,9 @@
 
 ## 記了什麼
 
-每次請求一列，寫在 `~/.claude/cost-ledger/<日期>/<session id>.jsonl`（檔案長到 3.5 MB 換下一個 `-2`、`-3`）。
+每次請求一列，寫在這個 repo 根目錄的 `data/cost-ledger/<日期>/<session id>.jsonl`（檔案長到 3.5 MB 換下一個 `-2`、`-3`）。`data/` 在 `.gitignore` 裡，不會被推上去；也不在 git 裡，刪掉或重新 clone repo 帳就沒了，要留就自己備份。想放別的地方，在設定裡改 `cost-ledger` 的 `dataDir`（可以用 `~` 開頭）。
+
+0.4 之前帳寫在 `~/.claude/cost-ledger/`。新版每次開 session 會把那裡有、這裡沒有的列併過來，照整行比對，不會重複算；那邊的檔不動。還開著的舊 session 會繼續寫那裡，之後開的 session 會再併一次；舊 session 都關掉之後，`~/.claude/cost-ledger/` 整個可以刪。
 
 - **四種 token**：未快取的輸入、輸出、快取讀取、快取寫入，各自照單價換算。
 - **快取寫入的時效**：引擎給的用量沒有分 5 分鐘和 1 小時，所以用推定的：主對話 1 小時、子 agent 5 分鐘。每一列都標著是推定的。

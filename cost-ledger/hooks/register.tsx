@@ -168,6 +168,8 @@ const prLoading = atom({ plugin: 'cost-ledger', key: 'isLoading' } as const, fal
 const ROLL_AT = 3_500_000
 
 let sessionId = ''
+// 帳本的資料夾：預設是 repo 根目錄的 data/cost-ledger（插件資料夾的上一層），data/ 不進版控；設定裡的 dataDir 可以改
+let configuredDir = ''
 let root = ''
 let pending: Row[] = []
 // 這個 session 的每一列（含還沒寫進檔的），面板的即時帳從這裡算；載入時從檔案重建
@@ -182,10 +184,37 @@ const agentCwd = new Map<string, string>()
 async function ensureInit($: EngineInterface): Promise<boolean> {
   if (sessionId === '') sessionId = await $.session.id()
   if (root === '') {
-    const home = await $.env.get('HOME')
-    if (home) root = `${home}/.claude/cost-ledger`
+    const wanted = configuredDir.trim()
+    if (wanted === '') root = `${$.plugin.root.replace(/\/+[^/]+\/*$/, '')}/data/cost-ledger`
+    else if (!wanted.startsWith('~/')) root = wanted.replace(/\/+$/, '')
+    else {
+      const home = await $.env.get('HOME')
+      if (home) root = `${home}${wanted.slice(1)}`.replace(/\/+$/, '')
+    }
   }
   return sessionId !== '' && root !== ''
+}
+
+// 0.3 之前帳寫在 ~/.claude/cost-ledger。還開著的舊 session 會繼續寫那裡，所以每次開 session 都把那裡有、這裡沒有的列併過來：
+// 照整行比對，併幾次都不會重複；那邊的檔不動，舊 session 都關掉之後整個資料夾可以刪
+async function mergeLegacy($: EngineInterface): Promise<void> {
+  const home = await $.env.get('HOME')
+  if (!home || !(await ensureInit($))) return
+  const legacy = `${home}/.claude/cost-ledger`
+  if (legacy === root || !(await $.fs.exists(legacy))) return
+  for (const day of await $.fs.list(legacy)) {
+    if (day.kind !== 'dir') continue
+    for (const file of await $.fs.list(`${legacy}/${day.name}`)) {
+      if (file.kind !== 'file' || !file.name.endsWith('.jsonl')) continue
+      const to = `${root}/${day.name}/${file.name}`
+      const have = (await $.fs.exists(to)) ? String(await $.fs.read(to)) : ''
+      const seen = new Set(have.split('\n'))
+      const missing = String(await $.fs.read(`${legacy}/${day.name}/${file.name}`))
+        .split('\n')
+        .filter((line) => line !== '' && !seen.has(line))
+      if (missing.length > 0) await $.fs.write(to, have + missing.map((line) => `${line}\n`).join(''))
+    }
+  }
 }
 
 async function flushNow($: EngineInterface): Promise<void> {
@@ -622,7 +651,7 @@ const prArg = (args: string): number | null => {
 
 async function report($: EngineInterface, args: string): Promise<string> {
   await flush($)
-  if (!(await ensureInit($))) return 'cost-ledger：讀不到 HOME，帳本沒有地方寫。'
+  if (!(await ensureInit($))) return 'cost-ledger：帳本沒有地方寫（設定的 dataDir 用了 ~，但讀不到 HOME）。'
   const pr = prArg(args)
   return format(pr === null ? sessionSummary() : await prSummary($, pr))
 }
@@ -664,7 +693,11 @@ const cardLine = (s: Summary): string => {
 
 const TOOL = 'mcp__cost-ledger__ledger'
 
-export const register: Register = (on) => {
+export const register: Register = (on, options) => {
+  // 設定改了會重新載入模組，路徑重新算
+  configuredDir = typeof options.dataDir === 'string' ? options.dataDir : ''
+  root = ''
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'ledger',
@@ -685,6 +718,11 @@ export const register: Register = (on) => {
     $.clock.every(15_000, () => {
       void flush($)
     })
+    try {
+      await mergeLegacy($)
+    } catch (err) {
+      $.ui.log(`cost-ledger: 併舊帳失敗：${String(err)}`, { to: 'debug' })
+    }
     await reloadSession($)
     return next(e)
   })

@@ -8,13 +8,43 @@ const TOOL = 'mcp__task-progress__estimate' as const
 // 秒數是 8 的倍數：轉圈從 ◐ 開始，沒有預估時跑的那一段從最左邊開始
 const START = Date.UTC(2026, 9, 6, 1, 0, 0)
 
-// 站在引擎那一側：時間、store 放在記憶體裡，session 的累計花費由測試撥。回傳時鐘、開過的面板 id 與 store 裡的紀錄
-const stubEngine = (on: On, cost: { usd: number | null }, options: { isPanePlaced?: boolean; history?: HistoryEntry[] } = {}) => {
+// 紀錄寫到設定的資料夾；測試都設成 /data，預設路徑另外測
+const DATA = { options: { dataDir: '/data' } }
+const MONTH = '/data/2026-10.jsonl'
+
+const jsonl = (entries: HistoryEntry[]) => entries.map((h) => `${JSON.stringify({ v: 1, ...h })}\n`).join('')
+
+// 站在引擎那一側：時間、檔案系統、store 放在記憶體裡，session 的累計花費由測試撥。
+// 回傳時鐘、開過的面板 id、檔案，與 /data 這個月的紀錄（最新的在前）
+const stubEngine = (
+  on: On,
+  cost: { usd: number | null },
+  options: { isPanePlaced?: boolean; files?: Record<string, string>; legacy?: HistoryEntry[] } = {},
+) => {
   const clock = mock.clock(on, { now: START })
-  const store = new Map<string, unknown>([['history', options.history ?? []]])
+  const files = new Map<string, string>(Object.entries(options.files ?? {}))
+  on('fs.exists', ($, e) => ({ value: files.has(e.path) || [...files.keys()].some((p) => p.startsWith(`${e.path}/`)) }))
+  on('fs.read', ($, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.write', ($, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.list', ($, e) => {
+    const prefix = `${e.path}/`
+    const entries = new Map<string, 'file' | 'dir'>()
+    for (const p of files.keys()) {
+      if (!p.startsWith(prefix)) continue
+      const [head = '', ...rest] = p.slice(prefix.length).split('/')
+      entries.set(head, rest.length > 0 ? 'dir' : 'file')
+    }
+    return { value: [...entries].map(([name, kind]) => ({ name, kind, size: 0, mtimeMs: 0, isLink: false })) }
+  })
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  // 0.1.0 把紀錄放在 store
+  const store = new Map<string, unknown>(options.legacy ? [['history', options.legacy]] : [])
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
-  on('store.set', ($, e) => {
-    store.set(e.key, JSON.parse(JSON.stringify(e.value)))
+  on('store.delete', ($, e) => {
+    store.delete(e.key)
     return { value: undefined }
   })
   const opens: string[] = []
@@ -45,8 +75,13 @@ const stubEngine = (on: On, cost: { usd: number | null }, options: { isPanePlace
     const { Box, Text } = $.ui.resolve(e)
     return Box({ key: 'below', children: Text({ children: '花費 $1.00' }) })
   })
-  const stored = () => (store.get('history') ?? []) as HistoryEntry[]
-  return { clock, opens, stored }
+  const stored = () =>
+    (files.get(MONTH) ?? '')
+      .split('\n')
+      .filter((l) => l !== '')
+      .map((l) => JSON.parse(l) as HistoryEntry & { v: number })
+      .reverse()
+  return { clock, opens, stored, files, store }
 }
 
 const startSession = ($: Engine) => $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
@@ -108,7 +143,7 @@ const entry = (id: string, estimate: [number, number], actual: [number, number],
   actual: { toolCalls: actual[0], costUsd: actual[1], durationMs: 60_000 },
 })
 
-test('Claude 宣告預估之後，卡片照工具次數與花費的平均算百分比，經過時間每秒跳；做完記一筆紀錄', async ($, on) => {
+test('Claude 宣告預估之後，卡片照工具次數與花費的平均算百分比，經過時間每秒跳；做完記一筆紀錄', DATA, async ($, on) => {
   const cost = { usd: 5 }
   const { clock, stored } = stubEngine(on, cost)
   await startSession($)
@@ -148,7 +183,7 @@ test('Claude 宣告預估之後，卡片照工具次數與花費的平均算百�
   expect(await cardLabel($)).toBe('✓ 完成 · 工具 2/10 · $2.20/$2.00 · 0:20  詳細 ›')
 })
 
-test('正在跑的工具接在卡片最後、列在面板的「正在跑」；跑完移到「剛跑完」並記下花了多久', async ($, on) => {
+test('正在跑的工具接在卡片最後、列在面板的「正在跑」；跑完移到「剛跑完」並記下花了多久', DATA, async ($, on) => {
   const { clock } = stubEngine(on, { usd: 0 })
   await startSession($)
 
@@ -170,18 +205,20 @@ test('正在跑的工具接在卡片最後、列在面板的「正在跑」；�
   await pane.unmount()
 })
 
-test('滿三筆紀錄就把下一次的預估乘上「實際 ÷ 預估」的中位數；Claude 改過預估就直接用它的數字', async ($, on) => {
+test('滿三筆紀錄就把下一次的預估乘上「實際 ÷ 預估」的中位數；Claude 改過預估就直接用它的數字', DATA, async ($, on) => {
   // 工具實際分別是預估的 2、1.5、3 倍，中位數 2；花費 1.5、1、2 倍，中位數 1.5。中斷的那筆不算
   const { stored } = stubEngine(
     on,
     { usd: 0 },
     {
-      history: [
-        entry('a', [10, 1], [20, 1.5]),
-        entry('b', [10, 1], [15, 1]),
-        entry('c', [10, 1], [30, 2]),
-        entry('d', [10, 1], [1, 0.1], 'aborted'),
-      ],
+      files: {
+        [MONTH]: jsonl([
+          entry('a', [10, 1], [20, 1.5]),
+          entry('b', [10, 1], [15, 1]),
+          entry('c', [10, 1], [30, 2]),
+          entry('d', [10, 1], [1, 0.1], 'aborted'),
+        ]),
+      },
     },
   )
   await startSession($)
@@ -206,7 +243,7 @@ test('滿三筆紀錄就把下一次的預估乘上「實際 ÷ 預估」的中�
   expect(stored()[0]?.revised).toEqual({ toolCalls: 20, costUsd: 3 })
 })
 
-test('超出預估時照實際的比例顯示、長條換色；子 agent 的工具另外數，它呼叫 estimate 不算數', async ($, on) => {
+test('超出預估時照實際的比例顯示、長條換色；子 agent 的工具另外數，它呼叫 estimate 不算數', DATA, async ($, on) => {
   const cost = { usd: 0 }
   const { clock } = stubEngine(on, cost)
   await startSession($)
@@ -232,7 +269,7 @@ test('超出預估時照實際的比例顯示、長條換色；子 agent 的工�
   await pane.unmount()
 })
 
-test('卡片接在別的插件那一行上面；有問卷就讓開，沒有任務、或做完沒動過工具的不佔位', async ($, on) => {
+test('卡片接在別的插件那一行上面；有問卷就讓開，沒有任務、或做完沒動過工具的不佔位', DATA, async ($, on) => {
   const { clock, opens } = stubEngine(on, { usd: 0 })
   await startSession($)
 
@@ -282,7 +319,7 @@ test('卡片接在別的插件那一行上面；有問卷就讓開，沒有任�
   await narrow.unmount()
 })
 
-test('背景工作做完接著跑的那一輪算回同一個任務；中斷的照記但不拿來校正；/clear 之後卡片收起來', async ($, on) => {
+test('背景工作做完接著跑的那一輪算回同一個任務；中斷的照記但不拿來校正；/clear 之後卡片收起來', DATA, async ($, on) => {
   const { clock, stored } = stubEngine(on, { usd: 0 })
   await startSession($)
 
@@ -313,7 +350,7 @@ test('背景工作做完接著跑的那一輪算回同一個任務；中斷的�
   expect(await cardLabel($)).toBeUndefined()
 })
 
-test('estimate 一開始就放進工具清單、不用問權限；系統提示加上固定的一段，沒有這個工具時不加', async ($, on) => {
+test('estimate 一開始就放進工具清單、不用問權限；系統提示加上固定的一段，沒有這個工具時不加', DATA, async ($, on) => {
   stubEngine(on, { usd: 0 })
   await startSession($)
 
@@ -336,7 +373,7 @@ test('estimate 一開始就放進工具清單、不用問權限；系統提示�
   expect((await compose(['Read'])).sections.map((s) => s.id)).toEqual(['intro'])
 })
 
-test('宿主沒有花費帳時只看工具次數；放不下面板的地方 /progress 把狀態印在對話裡', async ($, on) => {
+test('宿主沒有花費帳時只看工具次數；放不下面板的地方 /progress 把狀態印在對話裡', DATA, async ($, on) => {
   const { clock } = stubEngine(on, { usd: null }, { isPanePlaced: false })
   await startSession($)
 
@@ -349,4 +386,50 @@ test('宿主沒有花費帳時只看工具次數；放不下面板的地方 /pro
   expect(answer.text).toContain('**task-progress**')
   expect(answer.text).toContain('◐ 25% · 工具 1/4 · 0:00')
   expect(answer.text).toContain('Claude 預估：工具 4 次、$0.50')
+  expect(answer.text).toContain('紀錄：/data')
+})
+
+test('0.1.0 放在 store 的紀錄，開 session 時併進檔案再清掉；檔案裡已有的照 id 合併，不重複', DATA, async ($, on) => {
+  const { files, store } = stubEngine(on, { usd: 0 }, {
+    files: { [MONTH]: jsonl([entry('a', [10, 1], [20, 1.5])]) },
+    legacy: [entry('a', [10, 1], [20, 1.5]), entry('b', [8, 0.6], [4, 0.4])],
+  })
+  await startSession($)
+
+  const lines = (files.get(MONTH) ?? '').trim().split('\n')
+  expect(lines.map((l) => (JSON.parse(l) as HistoryEntry).id)).toEqual(['a', 'b'])
+  expect(store.has('history')).toBe(false)
+
+  const pane = await mountPane($, 'desktop')
+  expect(await pane.find({ text: 'b' })).toBeDefined()
+  expect(await pane.find({ text: '紀錄：/data' })).toBeDefined()
+  await pane.unmount()
+
+  // 再開一次 session：store 已經空了，檔案不變
+  await startSession($)
+  expect((files.get(MONTH) ?? '').trim().split('\n')).toHaveLength(2)
+})
+
+test('沒設定時寫到 repo 根目錄的 data/task-progress', async ($, on) => {
+  const { files } = stubEngine(on, { usd: 0 })
+  await startSession($)
+  await $.turn.start({ text: '改 README', turnId: 't1' })
+  await estimate($, 4, 0.5, '改 README')
+  await complete($)
+
+  const written = [...files.keys()]
+  expect(written).toHaveLength(1)
+  // 插件資料夾的上一層就是 repo 根目錄
+  expect(written[0]).toMatch(/\/data\/task-progress\/2026-10\.jsonl$/)
+  expect(written[0]).not.toMatch(/\/task-progress\/data\//)
+})
+
+test('設定的資料夾可以用 ~ 開頭', { options: { dataDir: '~/notes/progress/' } }, async ($, on) => {
+  const { files } = stubEngine(on, { usd: 0 })
+  await startSession($)
+  await $.turn.start({ text: '改 README', turnId: 't1' })
+  await estimate($, 4, 0.5, '改 README')
+  await complete($)
+
+  expect([...files.keys()]).toEqual(['/home/t/notes/progress/2026-10.jsonl'])
 })

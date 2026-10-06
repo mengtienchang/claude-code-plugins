@@ -1,3 +1,6 @@
 .DS_Store
 # 引擎載入插件時自動產生的型別（每次載入都會重寫），tsconfig 從這裡 extends
 */.claude-plugin/types/
+
+# 插件寫的紀錄（task-progress 的預估、cost-ledger 的帳），各插件一個子資料夾；個人資料，不進版控
+/data/

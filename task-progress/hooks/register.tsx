@@ -25,7 +25,8 @@ const INSTRUCTIONS = [
 // 中位數不會被一兩筆離譜的任務帶走；倍率夾在 1/4 到 4 倍之間，免得一筆 0 次工具的任務把分母壓到 0
 const WINDOW = 20
 const MIN_SAMPLES = 3
-const MAX_HISTORY = 100
+// 畫面與校正只要最近的；檔案裡全部留著
+const RECENT = 100
 const clampFactor = (x: number) => Math.min(4, Math.max(0.25, x))
 
 const median = (xs: number[]): number => {
@@ -78,16 +79,82 @@ const remainingOf = (t: Task, now: number): number | null => {
 }
 
 // ---- 狀態 ----
-// 畫面讀的值放 $.state：熱重載時模組變數會清空，這些留著；紀錄另外寫進 $.store，跨 session 留著
+// 畫面讀的值放 $.state：熱重載時模組變數會清空，這些留著；紀錄另外寫進檔案，跨 session 留著
 const taskAtom = atom({ plugin: 'task-progress', key: 'task' } as const, null as Task | null)
 const nowAtom = atom({ plugin: 'task-progress', key: 'now' } as const, 0)
 const historyAtom = atom({ plugin: 'task-progress', key: 'history' } as const, [] as HistoryEntry[])
 
-const HISTORY_KEY = 'history'
+// ---- 紀錄檔 ----
+// 預設寫在 repo 根目錄的 data/task-progress（插件資料夾的上一層），data/ 不進版控；設定裡的 dataDir 可以改。
+// 一個月一個檔，檔名是任務開始的月份（UTC），同一個任務接著跑再記一次也落在同一個檔
+let configuredDir = ''
+let dataDir = ''
 
-const storedHistory = async ($: EngineInterface): Promise<HistoryEntry[]> => {
-  const stored = await $.store.get(HISTORY_KEY)
-  return Array.isArray(stored) ? (stored as HistoryEntry[]) : []
+async function dirOf($: EngineInterface): Promise<string> {
+  if (dataDir !== '') return dataDir
+  const wanted = configuredDir.trim()
+  if (wanted === '') dataDir = `${$.plugin.root.replace(/\/+[^/]+\/*$/, '')}/data/task-progress`
+  else dataDir = (wanted.startsWith('~/') ? `${(await $.env.get('HOME')) ?? ''}${wanted.slice(1)}` : wanted).replace(/\/+$/, '')
+  return dataDir
+}
+
+const MONTH_FILE = /^\d{4}-\d{2}\.jsonl$/
+const monthOf = (h: HistoryEntry) => new Date(h.endedAt - h.actual.durationMs).toISOString().slice(0, 7)
+
+const parseEntries = (text: string): HistoryEntry[] => {
+  const entries: HistoryEntry[] = []
+  for (const line of text.split('\n')) {
+    if (line === '') continue
+    try {
+      const { v: _v, ...entry } = JSON.parse(line) as HistoryEntry & { v?: number }
+      entries.push(entry)
+    } catch {
+      // 寫到一半的行跳過
+    }
+  }
+  return entries
+}
+
+// 最新的月份讀起，讀到夠 RECENT 筆為止；最新的在前
+async function loadRecent($: EngineInterface): Promise<HistoryEntry[]> {
+  const dir = await dirOf($)
+  if (!(await $.fs.exists(dir))) return []
+  const months = (await $.fs.list(dir))
+    .filter((f) => f.kind === 'file' && MONTH_FILE.test(f.name))
+    .map((f) => f.name)
+    .sort()
+    .reverse()
+  const recent: HistoryEntry[] = []
+  for (const name of months) {
+    if (recent.length >= RECENT) break
+    recent.push(...parseEntries(String(await $.fs.read(`${dir}/${name}`))).sort((a, b) => b.endedAt - a.endedAt))
+  }
+  return recent.slice(0, RECENT)
+}
+
+// 寫之前重讀那個月的檔：同時開著的別的 session 也在記，照 id 合併，不整份蓋掉。檔裡照結束時間由舊到新
+async function saveEntries($: EngineInterface, entries: HistoryEntry[]): Promise<void> {
+  const dir = await dirOf($)
+  const byMonth = new Map<string, HistoryEntry[]>()
+  for (const h of entries) byMonth.set(monthOf(h), [...(byMonth.get(monthOf(h)) ?? []), h])
+  for (const [month, list] of byMonth) {
+    const path = `${dir}/${month}.jsonl`
+    const merged = new Map<string, HistoryEntry>()
+    if (await $.fs.exists(path)) for (const h of parseEntries(String(await $.fs.read(path)))) merged.set(h.id, h)
+    for (const h of list) merged.set(h.id, h)
+    const lines = [...merged.values()].sort((a, b) => a.endedAt - b.endedAt).map((h) => `${JSON.stringify({ v: 1, ...h })}\n`)
+    await $.fs.write(path, lines.join(''))
+  }
+}
+
+// 0.1.0 把紀錄放在插件的 $.store。還開著的舊 session 會繼續寫那裡，所以每次開 session 都把那裡有的併進檔案、再清掉
+const LEGACY_KEY = 'history'
+
+async function mergeLegacy($: EngineInterface): Promise<void> {
+  const stored = await $.store.get(LEGACY_KEY)
+  if (!Array.isArray(stored) || stored.length === 0) return
+  await saveEntries($, stored as HistoryEntry[])
+  await $.store.delete(LEGACY_KEY)
 }
 
 // 宿主沒有花費帳（cost 不在）時是 null
@@ -143,7 +210,6 @@ async function finish($: EngineInterface, status: TaskStatus): Promise<void> {
   if (done?.estimate && done.status === status) await record($, done, done.estimate)
 }
 
-// 寫之前重讀一次 store：同時開著的別的 session 也在記，照 id 合併，不整份蓋掉
 async function record($: EngineInterface, t: Task, estimate: Estimate): Promise<void> {
   const entry: HistoryEntry = {
     id: t.id,
@@ -154,9 +220,15 @@ async function record($: EngineInterface, t: Task, estimate: Estimate): Promise<
     revised: estimate.revisions > 0 ? estimate.latest : null,
     actual: { toolCalls: t.toolCalls, costUsd: t.costUsd, durationMs: elapsedOf(t, t.endedAt ?? t.startedAt) },
   }
-  const history = [entry, ...(await storedHistory($)).filter((h) => h.id !== entry.id)].slice(0, MAX_HISTORY)
-  await $.store.set(HISTORY_KEY, history)
-  await update($, historyAtom, () => history)
+  let history: HistoryEntry[] = []
+  try {
+    await saveEntries($, [entry])
+    history = await loadRecent($)
+  } catch (err) {
+    $.ui.log(`task-progress: 寫紀錄失敗：${String(err)}`, { to: 'debug' })
+  }
+  // 寫不進去也先讓面板看得到這一筆
+  await update($, historyAtom, () => (history.some((h) => h.id === entry.id) ? history : [entry, ...history]))
 }
 
 // 每秒一次：經過時間與轉圈靠它動，花費也在這裡跟上（session 的累計花費每次請求結束才變）
@@ -262,7 +334,7 @@ const cardLine = (t: Task, now: number): string => {
 }
 
 // 對話裡印的版本：/progress 放不下面板時用
-const format = (t: Task | null, history: HistoryEntry[], now: number): string => {
+const format = (t: Task | null, history: HistoryEntry[], now: number, dir: string): string => {
   const lines: string[] = ['**task-progress**']
   if (t === null) lines.push('還沒有任務。')
   else {
@@ -279,6 +351,7 @@ const format = (t: Task | null, history: HistoryEntry[], now: number): string =>
       ? `最近 ${c.samples} 筆做完的任務，實際 ÷ 預估的中位數：工具 ${times(c.factor.toolCalls)}、花費 ${times(c.factor.costUsd)}`
       : `做完的有預估任務 ${c.samples} 筆，滿 ${MIN_SAMPLES} 筆才開始校正。`,
   )
+  lines.push(`紀錄：${dir}`)
   return lines.join('\n')
 }
 
@@ -331,7 +404,10 @@ const openPane = async ($: EngineInterface) => (await $.ui.open({ id: PANE, titl
 // 卡片要不要佔位：進行中一律顯示（思考很久的時候也看得到在動）；做完的只在有預估或動過工具時留著
 const isShown = (t: Task | null): t is Task => t !== null && (t.status === 'running' || t.estimate !== null || t.toolCalls > 0)
 
-export const register: Register = (on) => {
+export const register: Register = (on, options) => {
+  // 設定改了會重新載入模組，路徑重新算
+  configuredDir = typeof options.dataDir === 'string' ? options.dataDir : ''
+  dataDir = ''
   // 工具跑多久從這裡算；沒有 tool_use_id 的呼叫給一個本地編號
   let seq = 0
 
@@ -361,8 +437,13 @@ export const register: Register = (on) => {
         required: ['toolCalls', 'costUsd', 'summary'],
       },
     })
-    const history = await storedHistory($)
-    await update($, historyAtom, () => history)
+    try {
+      await mergeLegacy($)
+      const history = await loadRecent($)
+      await update($, historyAtom, () => history)
+    } catch (err) {
+      $.ui.log(`task-progress: 讀紀錄失敗：${String(err)}`, { to: 'debug' })
+    }
     $.clock.every(1_000, () => tick($))
     return next(e)
   })
@@ -453,7 +534,7 @@ export const register: Register = (on) => {
   // /progress 開面板；放不下面板的地方把目前的狀態印在對話裡
   on('command.run', { command: 'progress' }, async ($) => {
     if (await openPane($)) return {}
-    return { text: format(await read($, taskAtom), await read($, historyAtom), await $.clock.now()) }
+    return { text: format(await read($, taskAtom), await read($, historyAtom), await $.clock.now(), await dirOf($)) }
   })
 
   // 輸入框上方的一行：長條加上一顆按鈕，按了開面板。別的插件（cost-ledger）也畫在這一格，
@@ -517,6 +598,7 @@ export const register: Register = (on) => {
     )
 
     const calibration = calibrationOf(history)
+    const dir = await dirOf($)
     const accuracy = (
       <Box flexDirection="column">
         <Text bold>預估準度</Text>
@@ -538,6 +620,7 @@ export const register: Register = (on) => {
             true,
           ),
         )}
+        <Text dimColor>{`紀錄：${dir}`}</Text>
       </Box>
     )
 

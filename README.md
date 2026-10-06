@@ -25,6 +25,10 @@
 
 終端機的互動 session 會盯著這些資料夾，存檔就重新載入；桌面版開的 session 要開新的才會載入改動。
 
+## 紀錄放在哪
+
+插件寫的紀錄放在這個 repo 根目錄的 `data/`，一個插件一個子資料夾（`data/cost-ledger/`、`data/task-progress/`）。`data/` 在 `.gitignore` 裡，不會被推上去，也不在 git 裡：刪掉或重新 clone repo 就沒了，要留就自己備份。各插件的設定裡有 `dataDir` 可以改到別的地方，細節看各自的 README。
+
 ## 開發
 
 每個插件資料夾裡：

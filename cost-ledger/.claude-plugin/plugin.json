@@ -1,7 +1,15 @@
 {
   "name": "cost-ledger",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": { "name": "mengtienchang" },
   "description": "每次模型請求的價格結構逐筆記帳（主對話與子 agent、四種 token、單價與各項金額、輸出速度、PR 證據），輸入框上方常駐卡片，點一下或 /ledger 開面板、工具查詢",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "dataDir": {
+      "type": "string",
+      "title": "帳本放哪個資料夾",
+      "description": "每次請求的帳寫在這個資料夾，<日期>/<session id>.jsonl。留空是 repo 根目錄的 data/cost-ledger；可以用 ~ 開頭",
+      "default": ""
+    }
+  }
 }

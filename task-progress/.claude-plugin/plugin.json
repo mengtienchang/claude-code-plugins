@@ -1,7 +1,15 @@
 {
   "name": "task-progress",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": { "name": "mengtienchang" },
   "description": "交代任務時讓 Claude 先預估要呼叫幾次工具、花多少錢，輸入框上方即時顯示做到幾 %，做完把預估與實際記下來校正下一次",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "dataDir": {
+      "type": "string",
+      "title": "紀錄放哪個資料夾",
+      "description": "預估與實際的紀錄寫在這個資料夾，一個月一個 .jsonl。留空是 repo 根目錄的 data/task-progress；可以用 ~ 開頭",
+      "default": ""
+    }
+  }
 }

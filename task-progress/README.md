@@ -23,13 +23,31 @@
 
 ## 校正
 
-做完一件有預估的事記一筆：Claude 第一次估的、最後改成的、實際的工具次數、花費與時間。紀錄跨 session 留在插件的 store 裡，最多 100 筆。
+做完一件有預估的事記一筆：Claude 第一次估的、最後改成的、實際的工具次數、花費與時間。所有 session、所有專案共用同一份紀錄。
 
 下一件事 Claude 宣告預估時，拿最近 20 筆「做完」的紀錄，工具次數與花費各自算「實際 ÷ 第一次預估」的中位數，滿 3 筆就把 Claude 的數字乘上這個倍率當目標。倍率夾在 0.25 到 4 倍之間。
 
 - 中斷、出錯的不拿來算：沒做完的實際數字不代表那件事的大小。
 - Claude 中途改過預估，就直接用它改的數字、不再乘倍率：它改的時候已經看到實際做了多少。
 - 倍率不告訴 Claude，系統提示那一段也固定不變。一來 prompt cache 不會因為紀錄變了而每輪失效；二來 Claude 自己跟著調的話，同一個偏差會被修正兩次。
+
+## 紀錄放在哪
+
+預設寫在這個 repo 根目錄的 `data/task-progress/`，一個月一個檔：`2026-10.jsonl`，一行一件事，照結束時間由舊到新。`data/` 在 `.gitignore` 裡，不會被推上去；也因為不在 git 裡，刪掉或重新 clone repo 紀錄就沒了，要留就自己備份這個資料夾。面板最下面和 `/progress` 都會印出實際的路徑。
+
+想放別的地方，在設定裡改 `task-progress` 的 `dataDir`（可以用 `~` 開頭），或在 `~/.claude/settings.json` 寫：
+
+```json
+{ "pluginConfigs": { "task-progress": { "options": { "dataDir": "~/某個資料夾" } } } }
+```
+
+每一行長這樣（`v` 是格式版本）：
+
+```json
+{"v":1,"id":"…","endedAt":1791267944908,"title":"更新本地 dev 並刪除已合併的分支","status":"done","estimate":{"toolCalls":8,"costUsd":0.6},"revised":null,"actual":{"toolCalls":4,"costUsd":0.4,"durationMs":50765}}
+```
+
+想清掉校正重來，刪掉這個資料夾裡的檔就好。0.1.0 把紀錄放在插件的 store（`~/.claude/plugins/store/`）；新版每次開 session 會把那裡的紀錄併進檔案、再清掉 store，還開著的舊 session 寫的也不會漏。
 
 ## 已知的限制
 

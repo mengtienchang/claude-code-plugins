@@ -121,9 +121,12 @@ const mountCard = ($: Engine, surface: 'terminal' | 'desktop', hasSurvey = false
 const cardLabel = async (card: Awaited<ReturnType<typeof mountCard>>) =>
   String((await card.find({ key: 'open-pane' }))?.props.label)
 
+// 帳寫到設定的資料夾；測試都設成 /data，預設路徑與舊資料夾另外測
+const DATA = { options: { dataDir: '/data' } }
+
 const startSession = ($: Engine) => $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
 
-test('主對話的請求照 1 小時快取拆價寫進帳本，查帳照 token 種類列出來', async ($, on) => {
+test('主對話的請求照 1 小時快取拆價寫進帳本，查帳照 token 種類列出來', DATA, async ($, on) => {
   const clock = { now: Date.UTC(2026, 9, 4, 1, 0, 0) }
   const files = new Map<string, string>()
   stubEngine(on, clock, files)
@@ -137,7 +140,7 @@ test('主對話的請求照 1 小時快取拆價寫進帳本，查帳照 token �
   expect(answer).toContain('依歸屬：分支 dev $0.20')
   expect(answer).toContain('Claude Code 自己記的這個 session 累計 $9.99')
 
-  const row = JSON.parse((files.get('/home/t/.claude/cost-ledger/2026-10-04/s1.jsonl') ?? '').trim())
+  const row = JSON.parse((files.get('/data/2026-10-04/s1.jsonl') ?? '').trim())
   expect(row.kind).toBe('request')
   expect(row.cacheTtl).toBe('1h')
   expect(row.tokens).toEqual({ input: 10, output: 1_000, cacheRead: 100_000, cacheWrite: 20_000 })
@@ -145,7 +148,7 @@ test('主對話的請求照 1 小時快取拆價寫進帳本，查帳照 token �
   expect(row.timing).toEqual({ ttftMs: 2_000, genMs: 20_000 })
 })
 
-test('輸出速度只算生成的那段，平均是總輸出除以總生成時間；首字時間每次請求直接平均；加上計時之前記的舊列兩個都不算', async ($, on) => {
+test('輸出速度只算生成的那段，平均是總輸出除以總生成時間；首字時間每次請求直接平均；加上計時之前記的舊列兩個都不算', DATA, async ($, on) => {
   const clock = { now: Date.UTC(2026, 9, 4, 7, 0, 0) }
   const files = new Map<string, string>()
   // 加上計時之前記的一列：輸出 5,000 token、沒有 timing 這一欄，金額照算
@@ -172,7 +175,7 @@ test('輸出速度只算生成的那段，平均是總輸出除以總生成時�
     branch: 'dev',
     engineCostUsd: null,
   }
-  files.set('/home/t/.claude/cost-ledger/2026-10-04/s1.jsonl', `${JSON.stringify(old)}\n`)
+  files.set('/data/2026-10-04/s1.jsonl', `${JSON.stringify(old)}\n`)
   stubEngine(on, clock, files)
   await startSession($)
 
@@ -203,7 +206,7 @@ test('輸出速度只算生成的那段，平均是總輸出除以總生成時�
   }
 })
 
-test('輸入框上方的卡片：沒有請求不佔位、有問卷就讓開，按了把面板開在這個 session；session 開始時不自己開面板', async ($, on) => {
+test('輸入框上方的卡片：沒有請求不佔位、有問卷就讓開，按了把面板開在這個 session；session 開始時不自己開面板', DATA, async ($, on) => {
   const clock = { now: Date.UTC(2026, 9, 4, 8, 0, 0) }
   const { opens } = stubEngine(on, clock, new Map())
   await startSession($)
@@ -257,7 +260,7 @@ test('輸入框上方的卡片：沒有請求不佔位、有問卷就讓開，�
   }
 })
 
-test('子 agent 的快取寫入照 5 分鐘算，每段工作歸給它之後開的那支 PR', async ($, on) => {
+test('子 agent 的快取寫入照 5 分鐘算，每段工作歸給它之後開的那支 PR', DATA, async ($, on) => {
   const clock = { now: Date.UTC(2026, 9, 4, 2, 0, 0) }
   const files = new Map<string, string>()
   stubEngine(on, clock, files)
@@ -282,7 +285,7 @@ test('子 agent 的快取寫入照 5 分鐘算，每段工作歸給它之後開�
   expect(second).toContain('1 個 session、1 次請求，共 **$0.16**')
 })
 
-test('派出時指定了目錄的子 agent，沒有 PR 證據時到它自己的目錄查分支，來源標上任務說明', async ($, on) => {
+test('派出時指定了目錄的子 agent，沒有 PR 證據時到它自己的目錄查分支，來源標上任務說明', DATA, async ($, on) => {
   const clock = { now: Date.UTC(2026, 9, 4, 3, 0, 0) }
   const files = new Map<string, string>()
   stubEngine(on, clock, files)
@@ -296,7 +299,7 @@ test('派出時指定了目錄的子 agent，沒有 PR 證據時到它自己的�
   expect(answer).toContain('依歸屬：分支 fix/draft-routes $0.14')
 })
 
-test('面板跟著每次請求即時更新，桌面版與終端機都畫得出來，複製出去的是同一份 markdown', async ($, on) => {
+test('面板跟著每次請求即時更新，桌面版與終端機都畫得出來，複製出去的是同一份 markdown', DATA, async ($, on) => {
   const clock = { now: Date.UTC(2026, 9, 4, 4, 0, 0) }
   const files = new Map<string, string>()
   stubEngine(on, clock, files)
@@ -352,7 +355,7 @@ test('面板跟著每次請求即時更新，桌面版與終端機都畫得出�
   }
 })
 
-test('放不下面板的地方，/ledger 照舊把表印在對話裡', async ($, on) => {
+test('放不下面板的地方，/ledger 照舊把表印在對話裡', DATA, async ($, on) => {
   const clock = { now: Date.UTC(2026, 9, 4, 6, 0, 0) }
   stubEngine(on, clock, new Map(), false)
 
@@ -363,7 +366,7 @@ test('放不下面板的地方，/ledger 照舊把表印在對話裡', async ($,
   expect(answer.text).toContain('共 **$0.20**')
 })
 
-test('/ledger pr <編號> 把面板切到那支 PR，分頁切得回這個 session', async ($, on) => {
+test('/ledger pr <編號> 把面板切到那支 PR，分頁切得回這個 session', DATA, async ($, on) => {
   const clock = { now: Date.UTC(2026, 9, 4, 5, 0, 0) }
   const files = new Map<string, string>()
   stubEngine(on, clock, files)
@@ -397,4 +400,53 @@ test('/ledger pr <編號> 把面板切到那支 PR，分頁切得回這個 sessi
     expect(await ui.find({ text: 'PR #101　$0.14' })).toBeDefined()
     await ui.unmount()
   }
+})
+
+// 舊資料夾裡的一列；內容不重要，併的時候照整行比對
+const agentRow = (id: string) =>
+  JSON.stringify({
+    v: 1,
+    kind: 'agent',
+    ts: '2026-10-04T00:00:00.000Z',
+    session: 'old',
+    agentId: id,
+    parentAgentId: null,
+    description: id,
+    subagentType: 'general-purpose',
+    model: 'claude-opus-5-5',
+    cwd: null,
+  })
+
+test('0.3 之前寫在 ~/.claude/cost-ledger 的帳，開 session 時把這裡沒有的列併過來；併幾次都不重複，舊檔不動', DATA, async ($, on) => {
+  const clock = { now: Date.UTC(2026, 9, 4, 9, 0, 0) }
+  const legacyPath = '/home/t/.claude/cost-ledger/2026-10-04/old.jsonl'
+  const legacy = `${agentRow('a1')}\n${agentRow('a2')}\n`
+  // 這裡已經有第一列（上一次開 session 併過的），舊 session 之後又寫了第二列
+  const files = new Map<string, string>([
+    [legacyPath, legacy],
+    ['/data/2026-10-04/old.jsonl', `${agentRow('a1')}\n`],
+  ])
+  stubEngine(on, clock, files)
+
+  await startSession($)
+  expect(files.get('/data/2026-10-04/old.jsonl')).toBe(legacy)
+  expect(files.get(legacyPath)).toBe(legacy)
+
+  await startSession($)
+  expect(files.get('/data/2026-10-04/old.jsonl')).toBe(legacy)
+})
+
+test('沒設定時帳寫到 repo 根目錄的 data/cost-ledger', async ($, on) => {
+  const clock = { now: Date.UTC(2026, 9, 4, 10, 0, 0) }
+  const files = new Map<string, string>()
+  stubEngine(on, clock, files)
+
+  await step($, 't1')
+  await ledgerTool($)
+
+  const written = [...files.keys()]
+  expect(written).toHaveLength(1)
+  // 插件資料夾的上一層就是 repo 根目錄
+  expect(written[0]).toMatch(/\/data\/cost-ledger\/2026-10-04\/s1\.jsonl$/)
+  expect(written[0]).not.toMatch(/\/cost-ledger\/data\//)
 })
