@@ -155,6 +155,7 @@ const emptySummary = (title: string): Summary => ({
   notes: [],
   recent: [],
   speed: { latest: null, average: null },
+  firstToken: { latest: null, average: null },
 })
 
 const sessionLedger = atom({ plugin: 'cost-ledger', key: 'session' } as const, emptySummary('這個 session'))
@@ -372,6 +373,10 @@ const tps = (x: number) => `${Math.round(x)} tok/s`
 const perSecond = (output: number, genMs: number) => (genMs > 0 ? (output * 1000) / genMs : null)
 // 加上計時之前記的列、一個片段都沒有的請求沒有生成時間，算不出速度
 const genMsOf = (r: RequestRow) => r.timing?.genMs ?? 0
+// 同樣的列也沒有首字時間；不能當成 0，否則平均會被拉低
+const ttftOf = (r: RequestRow) => r.timing?.ttftMs ?? null
+const mean = (m: { totalMs: number; count: number } | undefined) => (m === undefined || m.count === 0 ? null : m.totalMs / m.count)
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`
 const sourceOf = (r: RequestRow, agentNames: Map<string, string>) =>
   r.agentId === null ? '主對話' : (agentNames.get(r.agentId) ?? `子 agent ${r.agentId.slice(0, 8)}`)
 
@@ -407,6 +412,9 @@ const summarize = (
   // 速度照總輸出除以總生成時間，長的回應權重大；只叫一個工具的短回應單筆跳很大，平均不被它帶著走
   const speedByModel = new Map<string, { output: number; genMs: number }>()
   const speed = { output: 0, genMs: 0 }
+  // 首字時間每次請求各一個，直接平均：它跟輸出多長無關，主要看 prompt 多大、有沒有快取到
+  const ttftByModel = new Map<string, { totalMs: number; count: number }>()
+  const ttft = { totalMs: 0, count: 0 }
   let total = 0
   let unpriced = 0
   for (const r of requests) {
@@ -417,6 +425,13 @@ const summarize = (
       speed.genMs += genMs
       const m = speedByModel.get(r.model) ?? { output: 0, genMs: 0 }
       speedByModel.set(r.model, { output: m.output + r.tokens.output, genMs: m.genMs + genMs })
+    }
+    const ttftMs = ttftOf(r)
+    if (ttftMs !== null) {
+      ttft.totalMs += ttftMs
+      ttft.count++
+      const m = ttftByModel.get(r.model) ?? { totalMs: 0, count: 0 }
+      ttftByModel.set(r.model, { totalMs: m.totalMs + ttftMs, count: m.count + 1 })
     }
     const c = r.costUsd
     if (c === null) {
@@ -443,9 +458,10 @@ const summarize = (
     tokensPerSecond: perSecond(r.tokens.output, genMsOf(r)),
   }))
   const latest = newestFirst.find((r) => genMsOf(r) > 0)
+  const latestTtft = newestFirst.map(ttftOf).find((ms) => ms !== null) ?? null
   const models: ModelAmount[] = ranked(byModel).map((a) => {
     const m = speedByModel.get(a.label)
-    return { ...a, tokensPerSecond: m === undefined ? null : perSecond(m.output, m.genMs) }
+    return { ...a, tokensPerSecond: m === undefined ? null : perSecond(m.output, m.genMs), ttftMs: mean(ttftByModel.get(a.label)) }
   })
   return {
     title,
@@ -463,14 +479,26 @@ const summarize = (
       latest: latest === undefined ? null : perSecond(latest.tokens.output, genMsOf(latest)),
       average: perSecond(speed.output, speed.genMs),
     },
+    firstToken: { latest: latestTtft, average: mean(ttft) },
   }
 }
 
 const ASSUMPTION = '快取寫入的時效是推定的（主對話 1 小時、子 agent 5 分鐘）；思考 token 與網路搜尋次數 mod 拿不到，不在帳上。'
 const SPEED_NOTE = '輸出速度是輸出 token 除以生成時間（第一個片段到串流結束），等第一個片段的時間不算。'
+const TTFT_NOTE = '首字時間是送出請求到收到第一個回應片段的時間，含排隊與讀 prompt；第一個片段是思考的也算，所以不含思考的時間。平均是每次請求直接平均。'
 const inline = (list: Amount[]) => list.map((a) => `${a.label} ${usd(a.usd)}`).join('、')
+// 一個模型的平均輸出速度與平均首字時間，沒計時的那項不列
+const timingOf = (a: ModelAmount): string[] => [
+  ...(a.tokensPerSecond === null ? [] : [tps(a.tokensPerSecond)]),
+  ...(a.ttftMs === null ? [] : [`首字 ${secs(a.ttftMs)}`]),
+]
 const withSpeed = (list: ModelAmount[]) =>
-  list.map((a) => `${a.label} ${usd(a.usd)}${a.tokensPerSecond === null ? '' : `（${tps(a.tokensPerSecond)}）`}`).join('、')
+  list
+    .map((a) => {
+      const timing = timingOf(a)
+      return `${a.label} ${usd(a.usd)}${timing.length === 0 ? '' : `（${timing.join('、')}）`}`
+    })
+    .join('、')
 
 const format = (s: Summary): string => {
   if (s.requests === 0) return `cost-ledger｜${s.title}：還沒有紀錄。`
@@ -486,6 +514,7 @@ const format = (s: Summary): string => {
     `依模型：${withSpeed(s.byModel)}`,
     `依歸屬：${inline(s.byTarget)}`,
     ...(s.speed.average === null ? [] : [`輸出速度平均 ${tps(s.speed.average)}。${SPEED_NOTE}`]),
+    ...(s.firstToken.average === null ? [] : [`首字時間平均 ${secs(s.firstToken.average)}。${TTFT_NOTE}`]),
     ...(s.unpriced > 0 ? [`有 ${s.unpriced} 次請求的模型不在定價表裡，沒算進金額。`] : []),
     ASSUMPTION,
     ...s.notes,
@@ -625,11 +654,12 @@ async function loadPr($: EngineInterface, pr: number): Promise<void> {
 // 面板只在使用者要看的時候開（/ledger、按卡片），不在 session 開始時自己開
 const openPane = async ($: EngineInterface) => (await $.ui.open({ id: PANE, title: PANE_TITLE })).isPlaced
 
-// 卡片的那一行：總額，有計時的話加上最近一次與平均的輸出速度
+// 卡片的那一行：總額，有計時的話加上最近一次與平均的輸出速度、平均首字時間
 const cardLine = (s: Summary): string => {
   const { latest, average } = s.speed
   const speed = latest === null || average === null ? '' : ` · 輸出 ${tps(latest)}（平均 ${Math.round(average)}）`
-  return `花費 ${usd(s.totalUsd)}${speed}  詳細 ›`
+  const ttft = s.firstToken.average === null ? '' : ` · 首字平均 ${secs(s.firstToken.average)}`
+  return `花費 ${usd(s.totalUsd)}${speed}${ttft}  詳細 ›`
 }
 
 const TOOL = 'mcp__cost-ledger__ledger'
@@ -873,6 +903,9 @@ export const register: Register = (on) => {
           {s.speed.latest === null || s.speed.average === null ? null : (
             <Text dimColor>{`輸出速度：最近 ${tps(s.speed.latest)} · 平均 ${tps(s.speed.average)}`}</Text>
           )}
+          {s.firstToken.latest === null || s.firstToken.average === null ? null : (
+            <Text dimColor>{`首字時間：最近 ${secs(s.firstToken.latest)} · 平均 ${secs(s.firstToken.average)}`}</Text>
+          )}
         </Box>
         {s.requests === 0 ? (
           <Text dimColor>還沒有紀錄：mod 載入之後的請求才會記帳。</Text>
@@ -886,9 +919,7 @@ export const register: Register = (on) => {
             {s.byModel.length === 0 ? null : (
               <Box flexDirection="column">
                 <Text bold>依模型</Text>
-                {s.byModel.map((a) =>
-                  line(shortModel(a.label), `${usd(a.usd)}${a.tokensPerSecond === null ? '' : ` · ${tps(a.tokensPerSecond)}`}`),
-                )}
+                {s.byModel.map((a) => line(shortModel(a.label), [usd(a.usd), ...timingOf(a)].join(' · ')))}
               </Box>
             )}
             {section('依歸屬', s.byTarget)}
@@ -916,6 +947,7 @@ export const register: Register = (on) => {
             <Text dimColor>{n}</Text>
           ))}
           {s.speed.average === null ? null : <Text dimColor>{SPEED_NOTE}</Text>}
+          {s.firstToken.average === null ? null : <Text dimColor>{TTFT_NOTE}</Text>}
           <Text dimColor>{ASSUMPTION}</Text>
         </Box>
         <Box flexDirection="row" gap={1} flexWrap="wrap">

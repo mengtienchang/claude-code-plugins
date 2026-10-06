@@ -43,12 +43,12 @@ const stubEngine = (on: On, clock: { now: number }, files: Map<string, string>, 
     }
     return { value: [...entries].map(([name, kind]) => ({ name, kind, size: 0, mtimeMs: 0, isLink: false })) }
   })
-  // 每一步等 2 秒才有第一個片段，再花 20 秒產完輸出。turnId 帶 big 的那一步輸出加倍、10 秒就產完：
-  // 兩段工作的金額分得出來，兩筆的速度也不一樣（50 與 200 tok/s）
+  // 每一步等 2 秒才有第一個片段，再花 20 秒產完輸出。turnId 帶 big 的那一步 1 秒就有第一個片段、輸出加倍、10 秒就產完：
+  // 兩段工作的金額分得出來，兩筆的速度（50 與 200 tok/s）與首字時間也不一樣
   on('turn.step', async function* ($, e) {
     const isBig = e.turnId.includes('big')
     const usage = isBig ? { ...USAGE, output_tokens: 2_000 } : USAGE
-    clock.now += 2_000
+    clock.now += isBig ? 1_000 : 2_000
     yield { kind: 'text' as const, index: 0, text: '好' }
     clock.now += isBig ? 10_000 : 20_000
     yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage }
@@ -110,7 +110,7 @@ const CARD_PROPS = {
   hasSurvey: false,
   isWorking: false,
   maxRows: 10,
-  bodyColumns: 80,
+  bodyColumns: 100,
   scroll: { offset: 0, bodyRows: 10 },
   view: {},
 }
@@ -145,7 +145,7 @@ test('主對話的請求照 1 小時快取拆價寫進帳本，查帳照 token �
   expect(row.timing).toEqual({ ttftMs: 2_000, genMs: 20_000 })
 })
 
-test('輸出速度只算生成的那段，平均是總輸出除以總生成時間，加上計時之前記的舊列不算進速度', async ($, on) => {
+test('輸出速度只算生成的那段，平均是總輸出除以總生成時間；首字時間每次請求直接平均；加上計時之前記的舊列兩個都不算', async ($, on) => {
   const clock = { now: Date.UTC(2026, 9, 4, 7, 0, 0) }
   const files = new Map<string, string>()
   // 加上計時之前記的一列：輸出 5,000 token、沒有 timing 這一欄，金額照算
@@ -180,18 +180,22 @@ test('輸出速度只算生成的那段，平均是總輸出除以總生成時�
   await step($, 't1')
   await step($, 't2-big')
 
-  // 平均 3,000 ÷ 30 秒 = 100。等第一個片段的 4 秒算進去會是 88，兩筆直接平均會是 125，舊列的輸出算進去會更高
+  // 平均 3,000 ÷ 30 秒 = 100。等第一個片段的 3 秒算進去會是 91，兩筆直接平均會是 125，舊列的輸出算進去會更高。
+  // 首字時間 2 秒與 1 秒直接平均是 1.5 秒；舊列沒有首字時間，當成 0 算進去會變 1.0 秒
   const answer = await ledgerTool($)
-  expect(answer).toContain('依模型：claude-opus-5-5 $0.52（100 tok/s）')
+  expect(answer).toContain('依模型：claude-opus-5-5 $0.52（100 tok/s、首字 1.5s）')
   expect(answer).toContain('輸出速度平均 100 tok/s。')
+  expect(answer).toContain('首字時間平均 1.5s。')
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const card = await mountCard($, surface)
-    expect(await cardLabel(card)).toBe('花費 $0.52 · 輸出 200 tok/s（平均 100）  詳細 ›')
+    expect(await cardLabel(card)).toBe('花費 $0.52 · 輸出 200 tok/s（平均 100） · 首字平均 1.5s  詳細 ›')
     await card.unmount()
 
     const pane = await mountPane($, surface)
     expect(await pane.find({ text: '輸出速度：最近 200 tok/s · 平均 100 tok/s' })).toBeDefined()
+    expect(await pane.find({ text: '首字時間：最近 1.0s · 平均 1.5s' })).toBeDefined()
+    expect(await pane.find({ text: '$0.52 · 100 tok/s · 首字 1.5s' })).toBeDefined()
     expect(await pane.find({ text: '$0.20 · 120k · 50 tok/s' })).toBeDefined()
     // 舊列在最近的請求裡照列金額，沒有速度
     expect(await pane.find({ text: '$0.10 · 0k' })).toBeDefined()
@@ -222,17 +226,17 @@ test('輸入框上方的卡片：沒有請求不佔位、有問卷就讓開，�
     await busy.unmount()
 
     const card = await mountCard($, surface)
-    expect(await cardLabel(card)).toBe('花費 $0.20 · 輸出 50 tok/s（平均 50）  詳細 ›')
+    expect(await cardLabel(card)).toBe('花費 $0.20 · 輸出 50 tok/s（平均 50） · 首字平均 2.0s  詳細 ›')
     // 卡片只佔一行：按鈕和長條橫排
     expect((await card.find({ key: 'card' }))?.props.flexDirection).toBe('row')
     if (surface === 'terminal') {
-      // 字元長條塞在按鈕右邊，總長 20 格（按鈕那行佔 45 格，寬 80 放得下）；未快取的輸入分不到一格就不畫
+      // 字元長條塞在按鈕右邊，總長 20 格（按鈕那行佔 61 格，寬 100 放得下）；未快取的輸入分不到一格就不畫
       const cells = (await card.findAll({ type: 'Text', text: /^[█▒]+$/ })).map((t) => t.text)
       expect(cells.join('')).toHaveLength(20)
       expect(cells).toHaveLength(3)
 
-      // 寬 50 扣掉按鈕只剩 4 格，不畫長條，也不折成第二行
-      const narrow = await mountCard($, surface, false, 50)
+      // 寬 64 扣掉按鈕只剩 2 格，不畫長條，也不折成第二行
+      const narrow = await mountCard($, surface, false, 64)
       expect(await narrow.findAll({ type: 'Text', text: /^[█▒]+$/ })).toHaveLength(0)
       expect(await narrow.find({ key: 'open-pane' })).toBeDefined()
       await narrow.unmount()
