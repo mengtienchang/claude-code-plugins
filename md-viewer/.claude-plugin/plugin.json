@@ -1,0 +1,7 @@
+{
+  "name": "md-viewer",
+  "version": "0.1.0",
+  "author": { "name": "mengtienchang" },
+  "description": "在側邊窗格渲染 Markdown：mermaid 與內嵌 SVG 畫成圖、VitePress 容器轉引用、相對連結就地跳頁、存檔即刷新、跟著 Claude 的編輯換文件",
+  "types": "./types/index.d.ts"
+}

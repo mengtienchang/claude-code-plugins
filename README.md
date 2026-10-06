@@ -5,6 +5,7 @@
 | 插件 | 做什麼 |
 | --- | --- |
 | [cost-ledger](cost-ledger/) | 每次模型請求逐筆記帳：四種 token 的金額、輸出速度與首字時間、歸屬到哪支 PR；輸入框上方常駐一張卡片，點一下開側邊面板看詳細 |
+| [md-viewer](md-viewer/) | 在側邊窗格渲染 Markdown：mermaid 與內嵌 SVG 畫成圖、VitePress 的容器與 `<details>` 轉成引用、相對連結點了就在窗格裡換頁、存檔就刷新；`/md <路徑>` 開檔，也會跟著 Claude 正在改的 md 換過去 |
 
 ## 安裝
 
