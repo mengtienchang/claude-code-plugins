@@ -5,6 +5,7 @@
 | 插件 | 做什麼 |
 | --- | --- |
 | [cost-ledger](cost-ledger/) | 每次模型請求逐筆記帳：四種 token 的金額、輸出速度與首字時間、歸屬到哪支 PR；輸入框上方常駐一張卡片，點一下開側邊面板看詳細 |
+| [task-progress](task-progress/) | 交代任務時 Claude 先預估工具次數與花費，輸入框上方即時顯示做到幾 %、經過時間、正在跑的工具；做完把預估與實際記下來，校正下一次的預估 |
 | [md-viewer](md-viewer/) | 在側邊窗格渲染 Markdown：mermaid 與內嵌 SVG 畫成圖、VitePress 的容器與 `<details>` 轉成引用、相對連結點了就在窗格裡換頁、存檔就刷新；`/md <路徑>` 開檔，也會跟著 Claude 正在改的 md 換過去 |
 
 ## 安裝
@@ -15,7 +16,7 @@
 {
   "env": {
     "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1",
-    "CLAUDE_CODE_PLUGIN_DIRS": "~/path/to/claude-code-plugins/cost-ledger"
+    "CLAUDE_CODE_PLUGIN_DIRS": "~/path/to/claude-code-plugins/cost-ledger:~/path/to/claude-code-plugins/task-progress"
   }
 }
 ```

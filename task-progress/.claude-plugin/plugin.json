@@ -1,0 +1,7 @@
+{
+  "name": "task-progress",
+  "version": "0.1.0",
+  "author": { "name": "mengtienchang" },
+  "description": "交代任務時讓 Claude 先預估要呼叫幾次工具、花多少錢，輸入框上方即時顯示做到幾 %，做完把預估與實際記下來校正下一次",
+  "types": "./types/index.d.ts"
+}
